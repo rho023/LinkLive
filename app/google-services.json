@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "892335009664",
+    "project_id": "linklive-6475b",
+    "storage_bucket": "linklive-6475b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:892335009664:android:f7b9b702b9c2e8b7875b65",
+        "android_client_info": {
+          "package_name": "com.example.linklive"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "892335009664-fn1vf718l86fcgv1ujg79m40k08h2tbt.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.linklive",
+            "certificate_hash": "f92e9bff0ffe2fd0367bf7af2985468ed8f38d5d"
+          }
+        },
+        {
+          "client_id": "892335009664-b7n1kik8jo5l51r2siq5b8p10jfimpg8.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyALp3CYj5oJ9dZoKqzR7yhw59I5doF9KLE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "892335009664-b7n1kik8jo5l51r2siq5b8p10jfimpg8.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
