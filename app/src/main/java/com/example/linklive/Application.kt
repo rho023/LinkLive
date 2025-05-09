@@ -2,12 +2,10 @@ package com.example.linklive
 
 import android.app.Application
 import android.util.Log
-import dagger.hilt.android.HiltAndroidApp
 import io.github.crow_misia.mediasoup.MediasoupClient
 import io.github.crow_misia.webrtc.log.LogHandler
 import org.webrtc.Logging
 
-@HiltAndroidApp
 class Application : Application() {
     override fun onCreate() {
         super.onCreate()

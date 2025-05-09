@@ -43,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -53,17 +54,23 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import com.example.linklive.R
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.common.api.ApiException
 
 @Composable
-fun LoginScreen(
-    googleSignInClient: GoogleSignInClient = hiltViewModel<AuthViewModel>().googleSignInClient
-) {
-    val viewModel: AuthViewModel = hiltViewModel()
+fun LoginScreen() {
+    val context = LocalContext.current
+    val owner = LocalViewModelStoreOwner.current
+
+    val viewModel: AuthViewModel = remember {
+        ViewModelProvider(owner!!)[AuthViewModel::class.java]
+    }
+
+    val googleSignInClient = viewModel.provideGoogleSignInClient(context)
 
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }

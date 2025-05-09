@@ -36,14 +36,20 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import com.example.linklive.R
 import com.example.linklive.utils.SetStatusBarStyle
 import com.example.linklive.utils.UIState
 
 @Composable
 fun AuthScreen(onNavigateToHome: () -> Unit) {
-    val viewModel: AuthViewModel = hiltViewModel()
+    val owner = LocalViewModelStoreOwner.current
+
+    val viewModel: AuthViewModel = remember {
+        ViewModelProvider(owner!!)[AuthViewModel::class.java]
+    }
+
     val authState = viewModel.authState.collectAsState().value
 
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Login, 1: Register

@@ -35,12 +35,17 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import com.example.linklive.R
 
 @Composable
 fun RegisterScreen() {
-    val viewModel: AuthViewModel = hiltViewModel()
+    val owner = LocalViewModelStoreOwner.current
+
+    val viewModel: AuthViewModel = remember {
+        ViewModelProvider(owner!!)[AuthViewModel::class.java]
+    }
 
     var name by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }

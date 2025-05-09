@@ -3,7 +3,6 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.google.gms.google.services)
-    id("dagger.hilt.android.plugin") // hilt plugin
     id("kotlin-kapt")
 }
 
@@ -70,12 +69,6 @@ dependencies {
     implementation(libs.androidx.credentials.play.services.auth)
     implementation(libs.googleid)
 
-    //Dagger-Hilt
-    implementation(libs.hilt.android)
-    kapt(libs.hilt.compiler)
-    implementation(libs.androidx.hilt.navigation.compose)
-    kapt(libs.androidx.hilt.compiler)
-
     //Google auth
     implementation(libs.play.services.auth)
 
@@ -86,4 +79,16 @@ dependencies {
     implementation(libs.libmediasoup.android)
     implementation(libs.libwebrtc.ktx)
     implementation(libs.socket.io.client) // For Socket.IO
+
+    implementation(libs.androidx.lifecycle.viewmodel.ktx)
+
+    implementation(libs.androidx.runtime.livedata)
+
+    //Camera
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.androidx.camera.camera2)
+
+    implementation(libs.guava)
 }
