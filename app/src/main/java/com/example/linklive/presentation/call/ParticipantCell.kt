@@ -1,32 +1,30 @@
 package com.example.linklive.presentation.call
 
-import android.annotation.SuppressLint
-import android.os.Build
-import androidx.annotation.RequiresApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,62 +32,74 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.zIndex
+import coil.compose.AsyncImage
 import com.example.linklive.R
-import com.example.linklive.presentation.model.Participant
+import com.example.linklive.data.model.Participant
+import com.example.linklive.presentation.call.viewmodel.CallViewModel
 import com.example.linklive.utils.PeerConnectionUtils
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoTrack
-import kotlin.math.roundToInt
 
 @Composable
-fun ParticipantCell(participant: Participant, width: Dp, height: Dp) {
+fun ParticipantCell(
+    viewModel: CallViewModel,
+    participant: Participant,
+    width: Dp,
+    height: Dp
+) {
+    val focusedParticipant by viewModel.focusedParticipant
+
     Box(
         modifier = Modifier
             .width(width)
             .height(height)
-            .clip(RoundedCornerShape(16.dp)),
+            .clip(RoundedCornerShape(16.dp))
+            .pointerInput(focusedParticipant?.id) {
+                detectTapGestures(
+                    onDoubleTap = {
+                        if (focusedParticipant != null) viewModel.setFocusedParticipant(null) else viewModel.setFocusedParticipant(
+                            participant
+                        )
+                    }
+                )
+            },
         contentAlignment = Alignment.Center
     ) {
-        participant.videoTrack?.let { track ->
-            // Display video track
+        // Video handling
+        if(!participant.isVideoPaused) {
             VideoRenderer(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .zIndex(-10f),
-                videoTrack = track
+                    .fillMaxSize(),
+                videoTrack = participant.videoTrack
             )
-        } ?: Image(
-            painter = painterResource(id = R.drawable.baseline_account_circle),
-            contentDescription = "No video available",
-            modifier = Modifier
-                .width(100.dp)
-                .height(100.dp)
-        )
+        } else {
+            AsyncImage(
+                model = participant.photoUrl,
+                contentDescription = "No video available",
+                modifier = Modifier
+                    .size(100.dp)
+                    .clip(CircleShape)
+                    .align(Alignment.Center),
+                placeholder = painterResource(R.drawable.baseline_account_circle),
+                error = painterResource(R.drawable.baseline_account_circle)
+            )
+        }
 
         // Audio handling
-        if(participant.audioTrack == null) {
+        if (participant.isMute) {
             Image(
-                painter = painterResource(R.drawable.mute),
+                painter = painterResource(id = R.drawable.mute),
                 contentDescription = "Audio not available",
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(8.dp)
+                    .padding(8.dp),
+                colorFilter = ColorFilter.tint(Color.Red)
             )
-        } else {
-            DisposableEffect(participant.audioTrack) {
-                participant.audioTrack?.setEnabled(true)
-                onDispose {
-                    participant.audioTrack.setEnabled(false)
-                }
-            }
         }
 
         // Display participant name
@@ -103,180 +113,125 @@ fun ParticipantCell(participant: Participant, width: Dp, height: Dp) {
     }
 }
 
-@SuppressLint("UnusedBoxWithConstraintsScope")
-@RequiresApi(Build.VERSION_CODES.O)
 @Composable
-fun MyGridCell(
-    modifier: Modifier = Modifier,
-    height: Int,
-    width: Int,
-    participant: Participant
+fun CallControlBar(
+    viewModel: CallViewModel,
+    onToggleVideo: (Boolean) -> Unit,
+    onToggleAudio: (Boolean) -> Unit,
+    onChatClick: () -> Unit,
+    onShareScreen: (Boolean) -> Unit,
+    onEndCall: () -> Unit
 ) {
-    var offsetX by remember { mutableFloatStateOf(0f) }
-    var offsetY by remember { mutableFloatStateOf(0f) }
-    val pad = 16
+    var isCamEnabled by viewModel.isCamEnabled
+    var isMicEnabled by viewModel.isMicEnabled
+    var isShareScreenEnabled by viewModel.isScreenSharing
 
-    BoxWithConstraints(
-        modifier = Modifier.fillMaxSize()
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(4.dp)
+            .background(color = Color.Black.copy(alpha = 0.85f), shape = RoundedCornerShape(16.dp)),
+        horizontalArrangement = Arrangement.SpaceEvenly
     ) {
-        val parentWidth = constraints.maxWidth.toFloat()
-        val parentHeight = constraints.maxHeight.toFloat()
-        val windowWidth = with(LocalDensity.current) { (100 + pad).dp.toPx() }
-        val windowHeight = with(LocalDensity.current) { (160 + pad).dp.toPx() }
+        // Audio/Video Toggle Button
+        Spacer(modifier = Modifier.width(4.dp))
+        Button(
+            onClick = {
+                onToggleVideo(!isCamEnabled)},
+            modifier = Modifier.weight(1f).fillMaxHeight(),
 
-        // Initialize the box at the bottom end
-        offsetX = parentWidth - windowWidth
-        offsetY = parentHeight - windowHeight
-
-        Box(
-            modifier = modifier
-                .offset {
-                    IntOffset(
-                        offsetX.coerceIn(100f, parentWidth - windowWidth).roundToInt(),
-                        offsetY.coerceIn(100f, parentHeight - windowHeight).roundToInt()
-                    )
-                }
-                .width(width.dp)
-                .height(height.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color.Black)
-                .pointerInput(Unit) {
-                    detectDragGestures { change, dragAmount ->
-                        change.consume()
-                        offsetX += dragAmount.x
-                        offsetY += dragAmount.y
-                    }
-                }
+            shape = CircleShape,
+            enabled = !isShareScreenEnabled,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if(isCamEnabled) Color.Black.copy(alpha = 0.7f) else Color.White,
+                disabledContainerColor = if(isCamEnabled) Color.Black.copy(alpha = 0.7f).copy(alpha = 0.6f) else Color.White.copy(alpha = 0.6f),
+            ),
         ) {
-            participant.videoTrack?.let { track ->
-                LocalCameraPreview(Modifier.fillMaxSize())
-            } ?: Image(
-                painter = painterResource(id = R.drawable.baseline_account_circle),
-                contentDescription = "No video available",
-                modifier = Modifier
-                    .width(100.dp)
-                    .height(100.dp)
-            )
-
-            if (participant.audioTrack == null) {
-                Image(
-                    painter = painterResource(id = R.drawable.mute),
-                    contentDescription = "Audio not available",
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                )
-            } else {
-                DisposableEffect(participant.audioTrack) {
-                    participant.audioTrack?.setEnabled(true)
-                    onDispose { participant.audioTrack.setEnabled(false) }
-                }
-            }
-
-            Text(
-                text = participant.name,
-                color = Color.White,
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(8.dp)
+            Icon(
+                painter = painterResource(id = if(isCamEnabled) R.drawable.video_camera else R.drawable.video_camera_prohibited),
+                contentDescription = "Audio/Video Toggle",
+                tint = if(isCamEnabled) Color.White else Color.Black
             )
         }
+        Spacer(modifier = Modifier.width(4.dp))
+        // Audio Toggle Button
+        Button(
+            onClick = {
+                onToggleAudio(!isMicEnabled)},
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            colors = ButtonDefaults.buttonColors(containerColor= if(isMicEnabled) Color.Black.copy(alpha = 0.7f) else Color.White),
+            shape = CircleShape
+        ) {
+            Icon(
+                painter = painterResource(id = if (isMicEnabled) R.drawable.mic else R.drawable.mute),
+                contentDescription = "Audio Toggle",
+                tint = if(isMicEnabled) Color.White else Color.Black
+            )
+        }
+        Spacer(modifier = Modifier.width(4.dp))
+        // Screen Share Button
+        Button(
+            onClick = {
+                onShareScreen(!isShareScreenEnabled)
+                isCamEnabled = !isShareScreenEnabled},
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            colors = ButtonDefaults.buttonColors(containerColor= if(!isShareScreenEnabled) Color.Black.copy(alpha = 0.7f) else Color.White),
+            shape = CircleShape
+        ) {
+            Icon(
+                painter = painterResource(id = R.drawable.screencast),
+                contentDescription = "Screen Share",
+                tint = if(!isShareScreenEnabled) Color.White else Color.Black
+            )
+        }
+        Spacer(modifier = Modifier.width(4.dp))
+        // Chat Button
+        Button(
+            onClick = onChatClick,
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            colors = ButtonDefaults.buttonColors(containerColor= Color.Black.copy(alpha = 0.7f)),
+            shape = CircleShape
+        ) {
+            Icon(
+                painter = painterResource(id = R.drawable.chat),
+                contentDescription = "In-Call Messages",
+                tint = Color.White
+            )
+        }
+        Spacer(modifier = Modifier.width(3.dp))
+        // Leave Call Button (Red Color)
+        Button(
+            onClick = onEndCall,
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            colors = ButtonDefaults.buttonColors(containerColor= Color.Red),
+            shape = CircleShape
+        ) {
+            Icon(
+                painter = painterResource(id = R.drawable.end_call),
+                contentDescription = "Leave Call",
+                tint = Color.White
+            )
+        }
+        Spacer(modifier = Modifier.width(3.dp))
     }
 }
 
 @Composable
-fun CallControlBar(
-    onToggleVideo: () -> Unit,
-    onToggleAudio: () -> Unit,
-    onChatClick: () -> Unit,
-    onShareScreen: () -> Unit,
-    onEndCall: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(8.dp),
-        contentAlignment = Alignment.BottomCenter
-    ) {
-        Row(
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color.Black)
-                .padding(8.dp)
-        ) {
-            // Toggle Video Button
-            Button(
-                onClick = onToggleVideo,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.Black
-                )
-            ) {
-                Image(
-                    painterResource(R.drawable.video_camera),
-                    contentDescription = "Toggle Video",
-                    modifier = Modifier.size(20.dp),
-                    colorFilter = ColorFilter.tint(Color.White)
-                )
+fun ShowJoinDialog(name: String, onResult: (Boolean) -> Unit) {
+    AlertDialog(
+        onDismissRequest = { onResult(false) },
+        title = { Text(text = "$name is asking to join") },
+        confirmButton = {
+            Button(onClick = { onResult(true)} ) {
+                Text("Accept")
             }
-
-            // Toggle Audio Button
-            Button(
-                onClick = onToggleAudio,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.Black
-                )
-            ) {
-                Image(
-                    painterResource(R.drawable.mute),
-                    contentDescription = "Toggle Audio",
-                    modifier = Modifier.size(20.dp),
-                    colorFilter = ColorFilter.tint(Color.White)
-                )
-            }
-
-            // Chat Button
-            Button(
-                onClick = onChatClick,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.Black
-                )
-            ) {
-                Image(
-                    painterResource(R.drawable.chat),
-                    contentDescription = "Open Chat",
-                    modifier = Modifier.size(20.dp),
-                    colorFilter = ColorFilter.tint(Color.White)
-                )
-            }
-
-            // Share Screen Button
-            Button(
-                onClick = onShareScreen,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.Black
-                )
-            ) {
-                Image(
-                    painterResource(R.drawable.screencast),
-                    contentDescription = "Share Screen",
-                    modifier = Modifier.size(20.dp),
-                    colorFilter = ColorFilter.tint(Color.White)
-                )
-            }
-
-            // End Call Button
-            Button(
-                onClick = onEndCall,
-                colors = ButtonDefaults.buttonColors(Color.Red)
-            ) {
-                Image(
-                    painterResource(R.drawable.end_call),
-                    contentDescription = "End Call"
-                )
+        },
+        dismissButton = {
+            Button(onClick = { onResult(false) }) {
+                Text("Reject")
             }
         }
-    }
+    )
 }
 
 @Composable

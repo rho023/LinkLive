@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import com.example.linklive.R
+import com.example.linklive.presentation.auth.viewmodel.AuthViewModel
 
 @Composable
 fun RegisterScreen() {

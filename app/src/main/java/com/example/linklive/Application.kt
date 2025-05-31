@@ -17,12 +17,12 @@ class Application : Application() {
                     priority: Int, tag: String?,
                     t: Throwable?,
                     message: String?,
-                    vararg args: Any?,
+                    vararg args: Any?
                 ) {
                     Log.d("tim", "message = $message args = $args priority = $priority tag = $tag")
                 }
             },
-            loggableSeverity = Logging.Severity.LS_INFO,
+            loggableSeverity = Logging.Severity.LS_INFO
         )
     }
 }

@@ -1,77 +1,78 @@
 package com.example.linklive
 
-import android.app.ComponentCaller
-import android.content.Context
+import android.app.PictureInPictureParams
 import android.content.Intent
+import android.content.res.Configuration
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
-import android.widget.Toast
+import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.linklive.presentation.call.CallViewModel
+import androidx.lifecycle.lifecycleScope
+import com.example.linklive.data.preferences.getPeerId
+import com.example.linklive.data.preferences.isUserLoggedIn
+import com.example.linklive.presentation.call.viewmodel.CallViewModel
 import com.example.linklive.presentation.navigation.AppNavGraph
-import com.example.linklive.service.CallService
+import com.example.linklive.data.service.CallService
+import com.example.linklive.data.service.ShareScreenService
 import com.example.linklive.ui.theme.LinkLiveTheme
-import com.example.linklive.utils.PermissionUtil
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.webrtc.PeerConnectionFactory
 
 class MainActivity : ComponentActivity() {
     private val callViewModel: CallViewModel by viewModels()
-    private lateinit var requestPermissionsLauncher : ActivityResultLauncher<Array<String>>
     private val REQUEST_CODE_SCREEN_CAPTURE = 1001
 
     @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Log.d("rho", "main me hu 1")
 
-        requestPermissionsLauncher = registerForActivityResult(
-            ActivityResultContracts.RequestMultiplePermissions()
-        ) { permissions ->
-            // Handle the result of the permission request
-            val allGranted = permissions.all { it.value }
-            if (allGranted) {
-                Toast.makeText(this, "All permissions granted!", Toast.LENGTH_SHORT).show()
-                // Proceed with functionality
-            } else {
-                Toast.makeText(this, "Permissions required for audio and video are not granted.", Toast.LENGTH_SHORT).show()
-            }
-        }
+        val isLoggedIn = runBlocking { isUserLoggedIn(this@MainActivity) }
+        val peerId = runBlocking { getPeerId(this@MainActivity) }
 
-        // Use PermissionUtil to check and request permissions
-        val permissionUtil = PermissionUtil(this, requestPermissionsLauncher)
-        permissionUtil.checkAndRequestPermissions {
-            // Callback when all permissions are granted
-            Toast.makeText(this, "Permissions granted! Proceeding...", Toast.LENGTH_SHORT).show()
-        }
+        Log.d("socket", "peerId: $peerId, isLoggedIn: $isLoggedIn")
 
-        enableEdgeToEdge()
+//        enableEdgeToEdge()
         setContent {
             LinkLiveTheme {
                 AppNavGraph(
+                    isLoggedIn = isLoggedIn,
+                    peerId = peerId.toString(),
                     callViewModel = callViewModel,
-                    startService = {
+                    startService = { roomId, peerId, isHost ->
                         initialize()
-
-                        // Start service and bind to it
-                        val roomId = intent.getStringExtra("roomId") ?: "023"
-                        callViewModel.setRoomId(roomId)
-
-                        startCallService()
+                        return@AppNavGraph startCallService(roomId, peerId, isHost)
                     },
-                    isLoggedIn = true
+                    onEndCall = { callViewModel.endCall(this) },
+                    startScreenSharing = { startScreenSharing() },
+                    stopScreenSharing = { stopScreenSharing() }
                 )
             }
         }
+    }
+
+    private suspend fun startCallService(roomId: String, peerId: String, isHost: Boolean): Boolean {
+        val serviceIntent = Intent(this, CallService::class.java)
+        ContextCompat.startForegroundService(this, serviceIntent)
+        callViewModel.bindToService(this)
+        callViewModel.setServiceStartedValue(true)
+        return callViewModel.initializeSocket(roomId, peerId, isHost)
+    }
+
+    private fun startScreenSharing() {
+        val mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        startActivityForResult(mediaProjectionManager.createScreenCaptureIntent(), REQUEST_CODE_SCREEN_CAPTURE)
+    }
+
+    private fun stopScreenSharing() {
+        callViewModel.stopScreenSharing()
     }
 
     override fun onActivityResult(
@@ -80,41 +81,53 @@ class MainActivity : ComponentActivity() {
         data: Intent?
     ) {
         super.onActivityResult(requestCode, resultCode, data)
-        Log.d("rho", "main me hu 2")
 
         if(requestCode == REQUEST_CODE_SCREEN_CAPTURE && resultCode == RESULT_OK && data != null) {
             // Pass the projection data to your service
-            val serviceIntent = Intent(this, CallService::class.java)
-            val roomId = "023"
+            val serviceIntent = Intent(this, ShareScreenService::class.java)
+            val roomId = intent.getStringExtra("roomId") ?: "023"
             serviceIntent.putExtra("roomId", roomId)
-            serviceIntent.putExtra("resultCode", resultCode)
-            serviceIntent.putExtra("data", data)
-
             ContextCompat.startForegroundService(this, serviceIntent)
-            callViewModel.bindToService(this)
+            lifecycleScope.launch {
+                callViewModel.bindToShareScreenAwait(this@MainActivity)
+                callViewModel.startScreenSharing(resultCode, data)
+            }
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        // Resume participants data when activity comes to foreground
-    }
-
     override fun onDestroy() {
-        callViewModel.unbindFromService(this)
         super.onDestroy()
     }
 
     fun initialize() {
-        // Call this from Application.onCreate()
         PeerConnectionFactory.initialize(
             PeerConnectionFactory.InitializationOptions.builder(this)
                 .createInitializationOptions()
         )
     }
 
-    private fun startCallService() {
-        val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        startActivityForResult(mediaProjectionManager.createScreenCaptureIntent(), REQUEST_CODE_SCREEN_CAPTURE)
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun enterPipManually() {
+        val params = PictureInPictureParams.Builder()
+            .setAspectRatio(Rational(16, 9))
+            .build()
+        enterPictureInPictureMode(params)
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        Log.d("pip", "onPictureInPictureModeChanged: $isInPictureInPictureMode")
+        callViewModel.isPipMode.value = isInPictureInPictureMode
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    override fun onUserLeaveHint() {
+        if(callViewModel.isServiceStarted) {
+            super.onUserLeaveHint()
+            enterPipManually()
+        }
     }
 }

@@ -1,37 +1,38 @@
-package com.example.linklive.data
+package com.example.linklive.data.socket
 
 import android.content.Context
+import android.media.MediaRecorder
 import android.util.Log
-import io.github.crow_misia.mediasoup.Device
-import io.github.crow_misia.mediasoup.Producer
-import io.github.crow_misia.mediasoup.RecvTransport
-import io.github.crow_misia.mediasoup.SendTransport
-import io.github.crow_misia.webrtc.RTCComponentFactory
-import io.github.crow_misia.webrtc.RTCLocalAudioManager
-import io.github.crow_misia.webrtc.RTCLocalVideoManager
-import com.example.linklive.utils.CameraCapturerFactory
-import io.github.crow_misia.webrtc.option.MediaConstraintsOption
-import io.socket.client.IO
-import io.socket.client.Socket
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.launch
-import org.json.JSONObject
-import android.media.MediaRecorder.AudioSource
+import com.example.linklive.data.model.Participant
+import com.example.linklive.data.preferences.getUserInfo
 import com.example.linklive.domain.ServiceCallbackInterface
-import com.example.linklive.presentation.model.Participant
+import com.example.linklive.utils.CameraCapturerFactory
 import com.example.linklive.utils.JsonUtils
 import com.example.linklive.utils.PeerConnectionUtils
 import com.example.linklive.utils.toJsonObject
 import io.github.crow_misia.mediasoup.Consumer
+import io.github.crow_misia.mediasoup.Device
+import io.github.crow_misia.mediasoup.Producer
+import io.github.crow_misia.mediasoup.RecvTransport
+import io.github.crow_misia.mediasoup.SendTransport
 import io.github.crow_misia.mediasoup.Transport
 import io.github.crow_misia.mediasoup.createDevice
+import io.github.crow_misia.webrtc.RTCComponentFactory
+import io.github.crow_misia.webrtc.RTCLocalAudioManager
+import io.github.crow_misia.webrtc.RTCLocalVideoManager
+import io.github.crow_misia.webrtc.option.MediaConstraintsOption
 import io.socket.client.Ack
+import io.socket.client.IO
+import io.socket.client.Socket
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.json.JSONObject
 import org.webrtc.AudioTrack
 import org.webrtc.CameraVideoCapturer
 import org.webrtc.DefaultVideoDecoderFactory
@@ -39,7 +40,9 @@ import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.VideoTrack
+import java.net.URISyntaxException
 import kotlin.coroutines.resumeWithException
+import kotlin.text.ifEmpty
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SocketHandler(
@@ -70,30 +73,73 @@ class SocketHandler(
     private lateinit var peerConnectionFactory: PeerConnectionFactory
     private lateinit var mediaConstraintsOption: MediaConstraintsOption
     private lateinit var nProducers: String
-    private lateinit var myPeerId: String
-
+    private var myPeerId = ""
     private val rtcConfig = PeerConnection.RTCConfiguration(emptyList())
 
-    fun setupSocketConnection(roomId: String) = coroutineScope.launch {
+    private lateinit var videoProducerId: String
+    private lateinit var audioProducerId: String
+    private var isSpeakerAudio = false
+
+    fun toggleSpeakerAudio(isEnabled: Boolean) {
+        isSpeakerAudio = isEnabled
+    }
+
+    fun toggleCamera(isEnabled: Boolean) {
+        coroutineScope.launch {
+            if(isEnabled) {
+                serviceCallback.toggleParticipantVideo(myPeerId, true)
+                resumeVideo()
+            } else {
+                serviceCallback.toggleParticipantVideo(myPeerId, false)
+                pauseVideo()
+            }
+        }
+    }
+
+    fun toggleMic(isEnabled: Boolean) {
+        coroutineScope.launch {
+            if(isEnabled) {
+                serviceCallback.toggleParticipantAudio(myPeerId, true)
+                resumeAudio()
+            } else {
+                serviceCallback.toggleParticipantAudio(myPeerId, false)
+                pauseAudio()
+            }
+        }
+    }
+
+    suspend fun setupSocketConnection(
+        roomId: String,
+        peerId: String,
+        isHost: Boolean
+    ): Boolean {
         try {
+            myPeerId = peerId
             initializeSocket()
-            val roomData = joinRoom(roomId)
+            val roomData = joinRoom(roomId, isHost)
+            if(roomData.has("approved")) return false
             initializeMediaComponents()
             setupMediaSoupDevice(roomData)
             createTransports()
-            enableMediaIfPossible()
             removeParticipant()
+            enableMediaIfPossible()
             consumeRemoteProducers()
             consumeNewProducer()
+            pauseProducerOfPeer()
+            resumeProducerOfPeer()
+            receiveMessages()
+            if(isHost) handlePeerRequest()
         } catch (e: Exception) {
             Log.e(TAG, "Setup failed", e)
+            return false
             //Proper error handling - notify UI, etc.
         }
+        return true
     }
 
     private fun initializeSocket() {
         try {
-            socket = IO.socket("http://192.168.25.220:3000")
+            socket = IO.socket("http://192.168.1.5:3000")
             socket.connect()
             Log.d(TAG, "Socket connected: ${socket.connected()}")
 
@@ -103,28 +149,31 @@ class SocketHandler(
             socket.on(Socket.EVENT_DISCONNECT) {
                 Log.d("socket", "Socket disconnected")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error initializing socket: ${e.message}", e)
+        } catch (e: URISyntaxException) {
+            Log.e(TAG, "Invalid server URL: ", e)
             // Notify the UI or retry connection
         }
     }
 
-    private suspend fun joinRoom(roomId: String): JSONObject {
-        val roomRequest = JSONObject().put("roomId", roomId)
+    private suspend fun joinRoom(roomId: String, isHost: Boolean): JSONObject {
+        val roomRequest = JSONObject()
+            .put("roomId", roomId)
+            .put("peerId", myPeerId)
+            .put("isHost", isHost)
         socket.emit("join-room", roomRequest)
         Log.d(TAG, "Socket join-room: $roomRequest")
-        return socket.awaitEvent("room-joined")
+        val approved = socket.awaitEvent("join-approved")
+        Log.d(TAG, "approved: ${approved.getBoolean("approved")}")
+        return if(approved.getBoolean("approved")) socket.awaitEvent("room-joined") else approved
     }
 
     private fun initializeMediaComponents() {
         //Camera setup
-        camCapturer = (if(isProduce) {
-            CameraCapturerFactory.create(
-                context,
-                fixedResolution = false,
-                preferenceFrontCamera = "front" == cameraName
-            )
-        } else null)!!
+        camCapturer = CameraCapturerFactory.create(
+            context,
+            fixedResolution = false,
+            preferenceFrontCamera = "front" == cameraName
+        )!!
 
         //Create media constraints
         mediaConstraintsOption = MediaConstraintsOption().also {
@@ -139,8 +188,8 @@ class SocketHandler(
                 PeerConnectionUtils.eglContext
             )
             it.enableVideoDownstream(PeerConnectionUtils.eglContext)
-            it.audioSource = AudioSource.VOICE_COMMUNICATION
-            camCapturer?.also { capturer ->
+            it.audioSource = MediaRecorder.AudioSource.VOICE_COMMUNICATION
+            camCapturer.also { capturer ->
                 it.enableVideoUpstream(capturer, PeerConnectionUtils.eglContext)
             }
         }
@@ -155,9 +204,12 @@ class SocketHandler(
     private suspend fun setupMediaSoupDevice(roomData: JSONObject) {
         val routerRtpCapabilities = roomData.getJSONObject("routerRtpCapabilities").toString()
         val producers = roomData.getJSONArray("producers")
-        myPeerId = roomData.getString("peerId")
         Log.d(TAG, "myPeerId: $myPeerId")
-        serviceCallback.addParticipant(Participant(myPeerId, "You"))
+        coroutineScope.launch(Dispatchers.Main) {
+            serviceCallback.addMyParticipant(
+                Participant(id = myPeerId, name = "You", photoUrl = getUserInfo(context).second)
+            )
+        }
         nProducers = producers.toString()
         val peers = roomData.getJSONObject("peers")
         val jsonArray = JSONArray()
@@ -183,24 +235,19 @@ class SocketHandler(
         }
 
         withContext(Dispatchers.Default) {
-            if(!mediaSoupDevice.loaded) {
+            if (!mediaSoupDevice.loaded) {
                 mediaSoupDevice.load(routerRtpCapabilities, rtcConfig)
             }
         }
     }
 
     private suspend fun createTransports() = withContext(Dispatchers.IO) {
-        val sctpCapabilities = if(isUseDataChannel) {
+        val sctpCapabilities = if (isUseDataChannel) {
             mediaSoupDevice.sctpCapabilities.toJsonObject()
         } else null
 
-        if(isProduce) {
-            createSendTransport(sctpCapabilities)
-        }
-
-        if(isConsume) {
-            createRecvTransport(sctpCapabilities)
-        }
+        createSendTransport(sctpCapabilities)
+        createRecvTransport(sctpCapabilities)
     }
 
     private suspend fun createSendTransport(sctpCapabilities: JSONObject?) {
@@ -277,6 +324,9 @@ class SocketHandler(
     }
 
     private suspend fun enableMic() {
+        micProducer?.close()
+        localAudioManager.dispose()
+        micProducer = null
         //Implementation for enabling microphone
         localAudioManager.initTrack(peerConnectionFactory, mediaConstraintsOption)
         val track = localAudioManager.track ?: run {
@@ -286,6 +336,7 @@ class SocketHandler(
         withContext(Dispatchers.Main) {
             serviceCallback.updateParticipantAudio(myPeerId, track)
         }
+        track.setEnabled(true)
         val micProducer = sendTransport?.produce(
             listener = object : Producer.Listener {
                 override fun onTransportClose(producer: Producer) {
@@ -307,6 +358,10 @@ class SocketHandler(
     }
 
     private suspend fun enableCam() {
+        camProducer?.close()
+        camProducer = null
+        localVideoManager.dispose()
+        camCapturer.stopCapture()
         //Implementation for enabling camera
         localVideoManager.initTrack(peerConnectionFactory, mediaConstraintsOption, context)
         camCapturer.startCapture(640, 480, 30)
@@ -314,7 +369,7 @@ class SocketHandler(
             Log.d(TAG, "video track null")
             return
         }
-
+        track.setEnabled(true)
         withContext(Dispatchers.Main) {
             serviceCallback.updateParticipantVideo(myPeerId, track)
         }
@@ -336,6 +391,16 @@ class SocketHandler(
         )
         this.camProducer = camProducer
         Log.d(TAG, "addProducer = $camProducer")
+    }
+
+    fun switchCamera() {
+        if(::camCapturer.isInitialized) {
+            camCapturer.switchCamera(null)
+            cameraName = if(cameraName == "front") "back" else "front"
+            Log.d(TAG, "switchCamera: Camera switched to $cameraName")
+        } else {
+            Log.e(TAG, "Camera capturer not initialized")
+        }
     }
 
     private val sendTransportListener = object : SendTransport.Listener {
@@ -376,7 +441,7 @@ class SocketHandler(
                 try {
                     val response = socket.emitAndAwait("produce", json)
                     val producerId = response.optString("id", "")
-
+                    if(kind == "audio") audioProducerId = producerId else videoProducerId = producerId
                     producerId
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to produce", e)
@@ -398,7 +463,7 @@ class SocketHandler(
 
     private val recvTransportListener = object : RecvTransport.Listener {
         override fun onConnect(transport: Transport, dtlsParameters: String) {
-            Log.d(TAG, "onConnect - recv transport")
+            Log.d(TAG, "onConnect - receive transport")
             val jsonParameters = JSONObject(dtlsParameters)
             val payload = JSONObject().put("dtlsParameters", jsonParameters)
 
@@ -418,6 +483,7 @@ class SocketHandler(
     }
 
     suspend fun Socket.emitAndAwait(event: String, data: Any? = null): JSONObject {
+        Log.d(TAG, "emitAndAwait: $event")
         return suspendCancellableCoroutine { continuation ->
             val ackCallback = object : Ack {
                 override fun call(vararg args: Any?) {
@@ -450,6 +516,7 @@ class SocketHandler(
             once(event) { args ->
                 if (args.isNotEmpty() && args[0] is JSONObject) {
                     continuation.resume(args[0] as JSONObject) {}
+                    Log.d(TAG, "event: $event")
                 } else {
                     continuation.resumeWithException(
                         Exception("Invalid data for $event event")
@@ -471,7 +538,6 @@ class SocketHandler(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error consuming producers", e)
-//            callViewModel.notifyError("Failed to consume producers: ${e.message}")
         }
     }
 
@@ -479,15 +545,19 @@ class SocketHandler(
         try {
             socket.on("new-producer") { args ->
                 val newProducer = args[0] as JSONObject
-                coroutineScope.launch(Dispatchers.Main) {
-                    serviceCallback.addParticipant(
-                        Participant(
-                            id = newProducer.getString("peerId"),
-                            name = "New Peer"
+                val newPeerId = newProducer.getString("peerId")
+
+                if(newPeerId != myPeerId + "share") {
+                    coroutineScope.launch(Dispatchers.Main) {
+                        serviceCallback.addParticipant(
+                            Participant(
+                                id = newPeerId,
+                                name = "New Peer"
+                            )
                         )
-                    )
-                    Log.d(TAG, "New producer: $newProducer")
-                    consumeMedia(newProducer.getString("producerId"))
+                        Log.d(TAG, "New producer: $newProducer")
+                        consumeMedia(newProducer.getString("producerId"))
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -524,27 +594,120 @@ class SocketHandler(
                 appData = null
             ) ?: return
 
-            // Emit consumer-resume to the server
-            socket.emit("consumer-resume", JSONObject().put("consumerId", id))
-
             if("video" == consumer.kind) {
                 val videoTrack = consumer.track as VideoTrack
                 withContext(Dispatchers.Main) {
                     videoTrack.let {
                         serviceCallback.updateParticipantVideo(peerId, it)
                     }
+                    serviceCallback.updateVideoConsumer(id)
                 }
             } else {
                 val audioTrack = consumer.track as AudioTrack
                 withContext(Dispatchers.Main) {
+                    audioTrack.setEnabled(isSpeakerAudio)
                     audioTrack.let {
                         serviceCallback.updateParticipantAudio(peerId, it)
                     }
+                    serviceCallback.updateAudioConsumer(id)
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error consuming media: ${e.message}")
-//            callViewModel.notifyError("Failed to consume media: ${e.message}")
+        }
+    }
+
+    private fun pauseVideo() {
+        val producerId = JSONObject().put("producerId", videoProducerId)
+        socket.emit("pause-producer", producerId)
+    }
+
+    private fun resumeVideo() {
+        val producerId = JSONObject().put("producerId", videoProducerId)
+        socket.emit("resume-producer", producerId)
+    }
+
+    private fun pauseAudio() {
+        val producerId = JSONObject().put("producerId", audioProducerId)
+        socket.emit("pause-producer", producerId)
+    }
+
+    private fun resumeAudio() {
+        val producerId = JSONObject().put("producerId", audioProducerId)
+        socket.emit("resume-producer", producerId)
+    }
+
+    private fun pauseProducerOfPeer() {
+        try {
+            socket.on("producer-paused") { args ->
+                val json = args[0] as JSONObject
+                val peerId = json.getString("peerId")
+                val kind = json.getString("kind")
+                coroutineScope.launch(Dispatchers.Main) {
+                    if(kind == "audio") {
+                        val data = JSONObject().put("consumerId", serviceCallback.getAudioConsumer(peerId))
+                        socket.emit("pause-consumer", data)
+                        Log.d(TAG, "Consumer paused $data")
+                        serviceCallback.toggleParticipantAudio(peerId, false)
+                    } else {
+                        val data = JSONObject().put("consumerId", serviceCallback.getVideoConsumer(peerId))
+                        socket.emit("pause-consumer", data)
+                        serviceCallback.toggleParticipantVideo(peerId, false)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error pausing producer of peer: ${e.message}")
+        }
+    }
+
+    private fun resumeProducerOfPeer() {
+        try {
+            socket.on("producer-resumed") { args ->
+                val json = args[0] as JSONObject
+                val peerId = json.getString("peerId")
+                val kind = json.getString("kind")
+                coroutineScope.launch(Dispatchers.Main) {
+                    if(kind == "audio") {
+                        val data = JSONObject().put("consumerId", serviceCallback.getAudioConsumer(peerId))
+                        socket.emit("resume-consumer", data)
+                        Log.d(TAG, "Consumer resumed $data")
+                        serviceCallback.toggleParticipantAudio(peerId, true)
+                    } else {
+                        val data = JSONObject().put("consumerId", serviceCallback.getVideoConsumer(peerId))
+                        socket.emit("resume-consumer", data)
+                        serviceCallback.toggleParticipantVideo(peerId, true)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error resuming producer of peer: ${e.message}")
+        }
+    }
+
+    fun sendMessage(message: String) {
+        val message = JSONObject().put("text", message)
+        try {
+            socket.emit("message", message)
+            Log.d(TAG, "Message: $message")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending message: ${e.message}")
+        }
+    }
+
+    private fun receiveMessages() {
+        try {
+            socket.on("receive-message") { args ->
+                val data = args[0] as JSONObject
+                val senderPeerId = data.getString("peerId")
+                val message = data.getString("text")
+                Log.d(TAG, "Message received: $message")
+                coroutineScope.launch(Dispatchers.Main) {
+                    serviceCallback.addMessage(message, senderPeerId)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error receiving messages: ${e.message}")
         }
     }
 
@@ -561,6 +724,33 @@ class SocketHandler(
         }
     }
 
+    private fun handlePeerRequest() {
+        Log.d(TAG, "ask")
+        socket.on("ask-to-join") { args ->
+            try {
+                Log.d(TAG, "asking to join")
+                if(args.isNotEmpty()) {
+                    val data = args[0] as JSONObject
+                    val requesterPeerId = data.getString("requesterPeerId")
+                    val requesterSocketId = data.getString("requesterSocketId")
+                    serviceCallback.handlePeerRequest(requesterPeerId, requesterSocketId)
+                    Log.d(TAG, "handlePeerRequest: $requesterPeerId")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error handling ask-to-join: ${e.localizedMessage}", e)
+            }
+        }
+    }
+
+    fun approvePeer(approved: Boolean, requesterSocketId: String) {
+        val response = JSONObject().apply {
+            put("approved", approved)
+            put("to", requesterSocketId)
+        }
+        Log.d(TAG, "approvePeer: $approved")
+        socket.emit("ask-to-join-response", response)
+    }
+
     fun closeConnection() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -568,7 +758,7 @@ class SocketHandler(
                 recvTransport?.close()
                 socket.disconnect()
             } catch (e: Exception) {
-                Log.e(TAG, "Error ending call", e)
+                Log.e(TAG, "Error ending call: ${e.message}")
             } finally {
                 sendTransport = null
                 recvTransport = null

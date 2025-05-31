@@ -38,17 +38,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.linklive.R
+import com.example.linklive.presentation.auth.viewmodel.AuthViewModel
 import com.example.linklive.utils.SetStatusBarStyle
 import com.example.linklive.utils.UIState
 
 @Composable
 fun AuthScreen(onNavigateToHome: () -> Unit) {
-    val owner = LocalViewModelStoreOwner.current
-
-    val viewModel: AuthViewModel = remember {
-        ViewModelProvider(owner!!)[AuthViewModel::class.java]
-    }
+    val viewModel: AuthViewModel = viewModel()
 
     val authState = viewModel.authState.collectAsState().value
 

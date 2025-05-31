@@ -80,8 +80,8 @@ dependencies {
     implementation(libs.libwebrtc.ktx)
     implementation(libs.socket.io.client) // For Socket.IO
 
+    //ViewModel and LiveData
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
-
     implementation(libs.androidx.runtime.livedata)
 
     //Camera
@@ -91,4 +91,10 @@ dependencies {
     implementation(libs.androidx.camera.camera2)
 
     implementation(libs.guava)
+
+    // DataStore
+    implementation(libs.androidx.datastore.preferences)
+
+    // Coil for image loading
+    implementation(libs.coil.compose)
 }

@@ -1,10 +1,14 @@
-package com.example.linklive.presentation.auth
+package com.example.linklive.presentation.auth.viewmodel
 
+import android.app.Application
 import android.content.Context
+import android.util.Log
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
-import androidx.lifecycle.ViewModel
 import com.example.linklive.R
+import com.example.linklive.data.model.User
+import com.example.linklive.data.preferences.saveUserLocally
 import com.example.linklive.utils.UIState
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
@@ -13,11 +17,13 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import javax.inject.Inject
+import kotlinx.coroutines.launch
 
-class AuthViewModel () : ViewModel() {
+class AuthViewModel (application: Application) : AndroidViewModel(application) {
 
     private val _currentUser = MutableLiveData<FirebaseUser?>()
     val currentUser: LiveData<FirebaseUser?> get() = _currentUser
@@ -88,18 +94,40 @@ class AuthViewModel () : ViewModel() {
         auth.signInWithCredential(credential)
             .addOnCompleteListener { task ->
                 if (task.isSuccessful) {
-                    val user = auth.currentUser
-                    user?.let { firebaseUser ->
+                    val curUser = auth.currentUser
+                    curUser?.let { firebaseUser ->
                         val userData = hashMapOf(
                             "name" to firebaseUser.displayName,
-                            "email" to firebaseUser.email
+                            "email" to firebaseUser.email,
+                            "profilePhotoUrl" to firebaseUser.photoUrl.toString()
                         )
+                        Log.d("auth", "signInWithGoogle: signing in")
+                        val user = User(
+                            curUser.displayName.toString(),
+                            curUser.photoUrl.toString(),
+                            curUser.email.toString()
+                        )
+                        Log.d("auth", "signInWithGoogle: ${curUser.photoUrl.toString()}")
 
+                        // Save user data to Firestore
                         usersCollection.document(firebaseUser.uid)
                             .set(userData)
                             .addOnSuccessListener {
                                 _currentUser.value = firebaseUser
                                 _authState.value = UIState.Success("Google sign-in successful")
+
+                                // Save user locally
+                                val context = getApplication<Application>().applicationContext
+                                val peerId = firebaseUser.uid
+                                CoroutineScope(Dispatchers.IO).launch {
+                                    saveUserLocally(
+                                        context,
+                                        user.name,
+                                        user.profilePhotoUrl.toString(),
+                                        peerId,
+                                        user.email
+                                    )
+                                }
                             }
                             .addOnFailureListener { exception ->
                                 _authState.value = UIState.Error(exception)
